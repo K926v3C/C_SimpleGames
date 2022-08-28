@@ -5,17 +5,15 @@
 #include <conio.h>
 #include <Windows.h>
 
+#pragma comment(lib, "user32.lib")
+
 #define POW(x) ((x) * (x))
 #define LEN 4
+#define INDEX(row, column) ((row)*LEN + (column))
 #define MAX_NUM_LEN 6 // 2^17 == 131072
 
-typedef uint_fast8_t map_uint;
-typedef uint_fast32_t score_uint;
-typedef struct
-{
-    unsigned changed_map : 1;
-    unsigned is_filled : POW(LEN);
-} map_status;
+typedef uint_fast8_t uint_map_t;
+typedef uint_fast32_t uint_score_t;
 typedef enum
 {
     UP,
@@ -31,22 +29,64 @@ typedef enum
     BOTTOM_RIGHT_INDEX = (LEN * LEN - 1)
 } Corner;
 
-static map_uint map[POW(LEN)] = {0};
-static score_uint score = 0;
-static map_status status = {.changed_map = 0, .is_filled = 0};
+static const unsigned ColorArray[] = {239, 251, 67, 31, 51, 83, 21, 93, 164, 196, 226, 214};
+static const size_t ColorArrayLength = sizeof(ColorArray) / sizeof(unsigned);
 
-inline void init_console(void);
+static uint_map_t map[POW(LEN)] = {0};
+static uint_score_t score = 0;
+
+void initialize(void);
+void init_console(void);
+void print_map(void);
 Direction get_direction(void);
-void oprate_map(const Direction direction);
-void move_line(const size_t start, const size_t end, const int step);
-void merge_line(const size_t start, const size_t end, const int step);
-inline void print_map(void);
+int modify_map(const Direction direction);
+int move_line(const size_t start, const size_t end, const int step);
+int merge_line(const size_t start, const size_t end, const int step);
+size_t gen_number(void);
+int check_game_over(void);
 
 int main(void)
 {
-    extern map_uint map[POW(LEN)];
-    extern score_uint score;
-    extern map_status status;
+    extern uint_score_t score;
+
+    initialize();
+
+    /* 程序主循环 */
+    for (int is_dead = 0; !is_dead;)
+    {
+        printf_s("\033c");     // 清屏
+        printf_s("\x1b[?25l"); // 隐藏光标
+        printf_s("\nScore: %u\n\n", score);
+        print_map();
+
+        while (!modify_map(get_direction()))
+            ;
+
+        if (!gen_number()) // 返回值：地图当前空位数
+        {
+            is_dead = check_game_over();
+        }
+    }
+
+    printf_s("\033c");
+    printf_s("\x1b[?25l");
+    for (size_t i = 0; i < (MAX_NUM_LEN + 1) * LEN + 1; i++)
+    {
+        putchar('-');
+    }
+    putchar('\n');
+    printf_s("Game over!\nFinal Score: %u\n", score);
+    print_map();
+
+    while (_getch() != '\x1b')
+        ;
+
+    return 0;
+}
+
+void initialize(void)
+{
+    extern uint_map_t map[POW(LEN)];
 
     /* 设置随机数种子 */
     srand((unsigned)time(NULL));
@@ -54,80 +94,27 @@ int main(void)
     /* 初始化控制台 */
     init_console();
 
-    /* 空位计数 */
-    size_t empty_slot_num = 0;
+    /* 设置控制台窗口标题 */
+    printf_s("\x1b]0;2048\x7");
 
-    /* 程序主循环 */
-    for (;;)
-    {
-        /* 扫描地图填充状态 */
-        for (size_t i = 0; i < POW(LEN); i++)
-        {
-            if (map[i])
-            {
-                status.is_filled |= (1 << i);
-            }
-            else
-            {
-                empty_slot_num++;
-            }
-        }
-
-        /* 有空位时随机生成数字 */
-        if (empty_slot_num)
-        {
-            for (size_t map_index = 0,
-                        empty_slot_count = 0,
-                        target_empty_slot = rand() % empty_slot_num + 1;
-                 ;
-                 map_index++)
-            {
-                // 如果当前索引处为空位
-                if (!(status.is_filled & (1 << map_index)))
-                {
-                    empty_slot_count++; // 递增计数
-
-                    if (empty_slot_count == target_empty_slot)
-                    {
-                        map[map_index] = rand() % 2 + 1;
-                        break;
-                    }
-                }
-            }
-        }
-
-        /* 显示地图并相应玩家操作 */
-        print_map();
-    change_map:
-        oprate_map(get_direction());
-        if (!status.changed_map)
-        {
-            goto change_map;
-        }
-
-        /* 重置状态信息 */
-        status.changed_map = 0;
-        status.is_filled = 0;
-        empty_slot_num = 0;
-    }
-
-    /*
-    TODO:
-    - 颜色
-    */
-
-    return 0;
+    /* 初始化地图 */
+    int i = rand() % POW(LEN);
+    int j = rand() % (POW(LEN) - 1);
+    map[i] = 1;
+    map[j + (i == j)] = rand() % 10 ? 1 : 2;
 }
 
-inline void init_console(void)
+void init_console(void)
 {
+    /* 获取标准输出流 */
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE)
     {
-        puts("Error: GetStdHandle()");
+        puts("Error: GetStdHandle(STD_OUTPUT_HANDLE)");
         exit(EXIT_FAILURE);
     }
 
+    /* 设置控制台信息 */
     CONSOLE_SCREEN_BUFFER_INFOEX ConsoleInfoEx;
     ConsoleInfoEx.cbSize = sizeof(ConsoleInfoEx);
     if (!GetConsoleScreenBufferInfoEx(hOut, &ConsoleInfoEx))
@@ -135,10 +122,9 @@ inline void init_console(void)
         printf_s("Error: GetConsoleScreenBufferInfoEx (Code %lu)\n", GetLastError());
         exit(EXIT_FAILURE);
     }
-
     COORD ConsoleBufferSize = {
         .X = ((MAX_NUM_LEN + 1) * LEN) + 1,
-        .Y = (2 * LEN + 1) + 2};
+        .Y = (2 * LEN + 1) + 3};
     SMALL_RECT ConsoleWindowRect = {
         .Top = 0,
         .Left = 0,
@@ -153,22 +139,111 @@ inline void init_console(void)
         exit(EXIT_FAILURE);
     }
 
-    DWORD dwOriginalMode;
-    if (!GetConsoleMode(hOut, &dwOriginalMode))
+    /* 设置控制台输出模式 */
+    DWORD dwOutputMode;
+    if (!GetConsoleMode(hOut, &dwOutputMode))
     {
         printf_s("Error: GetConsoleMode (Code %lu)\n", GetLastError());
         exit(EXIT_FAILURE);
     }
-
-    if (!SetConsoleMode(hOut, dwOriginalMode | DISABLE_NEWLINE_AUTO_RETURN | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    if (!SetConsoleMode(hOut, dwOutputMode | DISABLE_NEWLINE_AUTO_RETURN | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     {
         printf_s("Error: SetConsoleMode (Code %lu)\n", GetLastError());
         exit(EXIT_FAILURE);
     }
 
-    /* 隐藏光标 */
-    // putchar('\x1b');
-    // printf_s("\x1b[?25l");
+    /* 获取标准输入流 */
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn == INVALID_HANDLE_VALUE)
+    {
+        puts("Error: GetStdHandle(STD_INPUT_HANDLE)");
+        exit(EXIT_FAILURE);
+    }
+
+    /* 设置控制台输入模式 */
+    DWORD dwInputMode;
+    if (!GetConsoleMode(hIn, &dwInputMode))
+    {
+        printf_s("Error: GetConsoleMode (Code %lu)\n", GetLastError());
+        exit(EXIT_FAILURE);
+    }
+    if (!SetConsoleMode(hIn, dwInputMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    {
+        printf_s("Error: SetConsoleMode (Code %lu)\n", GetLastError());
+        exit(EXIT_FAILURE);
+    }
+
+    /* 获取控制台窗口句柄 */
+    HWND hConsoleWindow = GetConsoleWindow();
+    if (hConsoleWindow == NULL)
+    {
+        puts("Error: GetConsoleWindow()");
+        exit(EXIT_FAILURE);
+    }
+
+    /* 获取控制台窗口样式 */
+    LONG_PTR WindowStyle = GetWindowLongPtr(hConsoleWindow, GWL_STYLE);
+    if (!WindowStyle)
+    {
+        puts("Error: GetWindowLongPtr");
+        exit(EXIT_FAILURE);
+    }
+
+    /* 设置控制台窗口样式 */
+    if (!SetWindowLongPtr(hConsoleWindow,
+                          GWL_STYLE,
+                          WindowStyle & ~WS_HSCROLL & ~WS_HSCROLL & ~WS_MAXIMIZEBOX & ~WS_SIZEBOX))
+    {
+        printf_s("Error: SetWindowLongPtr (Code %lu)\n", GetLastError());
+        exit(EXIT_FAILURE);
+    }
+}
+
+void print_map(void)
+{
+    extern uint_map_t map[POW(LEN)];
+
+    extern const unsigned ColorArray[];
+    extern const size_t ColorArrayLength;
+
+    for (size_t row = 0; row < LEN; row++)
+    {
+        /* 打印水平分隔线 */
+        for (size_t column = 0; column < LEN; column++)
+        {
+            putchar('+');
+            for (size_t i = 0; i < MAX_NUM_LEN; i++)
+            {
+                putchar('-');
+            }
+        }
+        putchar('+');
+        putchar('\n');
+
+        /* 打印竖直分隔线与数字 */
+        for (size_t column = 0, index; column < LEN; column++)
+        {
+            index = INDEX(row, column);
+            putchar('|');
+            printf_s("\x1b[38;5;%um%*u\x1b[0m",
+                     map[index] > ColorArrayLength - 1 ? 7 : ColorArray[map[index]],
+                     MAX_NUM_LEN,
+                     map[index] ? 1 << map[index] : 0);
+        }
+        putchar('|');
+        putchar('\n');
+    }
+
+    /* 打印水平分隔线 */
+    for (size_t column = 0; column < LEN; column++)
+    {
+        putchar('+');
+        for (size_t i = 0; i < MAX_NUM_LEN; i++)
+        {
+            putchar('-');
+        }
+    }
+    putchar('+');
 }
 
 Direction get_direction(void)
@@ -224,8 +299,10 @@ Direction get_direction(void)
     }
 }
 
-void oprate_map(const Direction direction)
+int modify_map(const Direction direction)
 {
+    int is_modified = 0;
+
     size_t first, last;
     int step;
 
@@ -265,19 +342,22 @@ void oprate_map(const Direction direction)
          current != last + i;
          current += i)
     {
-        move_line(current, current + ((LEN - 1) * step), step);
-        merge_line(current, current + ((LEN - 1) * step), step);
-        move_line(current, current + ((LEN - 1) * step), step);
+        is_modified |= move_line(current, current + ((LEN - 1) * step), step);
+        is_modified |= merge_line(current, current + ((LEN - 1) * step), step);
+        is_modified |= move_line(current, current + ((LEN - 1) * step), step);
     }
+
+    return is_modified;
 }
 
-void move_line(const size_t start, const size_t end, const int step)
+int move_line(const size_t start, const size_t end, const int step)
 {
-    extern map_uint map[POW(LEN)];
-    extern map_status status;
+    extern uint_map_t map[POW(LEN)];
+
+    int is_modified = 0;
 
     size_t slow_i = start, fast_i;
-    map_uint rest_of_part;
+    uint_map_t rest_of_part;
 
     do
     {
@@ -291,18 +371,21 @@ void move_line(const size_t start, const size_t end, const int step)
             {
                 map[fast_i - step] = map[fast_i];
                 map[fast_i] = 0;
-                status.changed_map = 1;
+                is_modified = 1;
             }
         }
         slow_i += map[slow_i] ? step : 0;
     } while (rest_of_part && slow_i != end);
+
+    return is_modified;
 }
 
-void merge_line(const size_t start, const size_t end, const int step)
+int merge_line(const size_t start, const size_t end, const int step)
 {
-    extern map_uint map[POW(LEN)];
-    extern score_uint score;
-    extern map_status status;
+    extern uint_map_t map[POW(LEN)];
+    extern uint_score_t score;
+
+    int is_modified = 0;
 
     // i 指针触及行尾时即可结束循环
     for (size_t i = start; i != end; i += step)
@@ -311,56 +394,94 @@ void merge_line(const size_t start, const size_t end, const int step)
         {
             map[i + step] = 0;
             score += (1 << (++map[i]));
-            status.changed_map = 1;
+            is_modified = 1;
         }
     }
+
+    return is_modified;
 }
 
-inline void print_map(void)
+size_t gen_number(void)
 {
-    extern map_uint map[POW(LEN)];
-    extern score_uint score;
+    extern uint_map_t map[POW(LEN)];
 
-    /* 清屏 */
-    putchar('\x1b');
-    putchar('c');
+    /* 记录地图状态 */
+    size_t map_status = {0};
 
-    printf_s("Score: %u\n\n", score);
+    /* 空位计数 */
+    size_t empty_slot_num = 0;
 
-    for (size_t row = 0; row < LEN; row++)
+    /* 扫描地图填充状态 */
+    for (size_t i = 0; i < POW(LEN); i++)
     {
-        /* 打印水平分隔线 */
-        for (size_t column = 0; column < LEN; column++)
+        if (map[i])
         {
-            putchar('+');
-            for (size_t i = 0; i < MAX_NUM_LEN; i++)
+            map_status |= (1ULL << i);
+        }
+        else
+        {
+            empty_slot_num++;
+        }
+    }
+
+    /* 有空位时随机生成数字 */
+    if (empty_slot_num)
+    {
+        for (size_t map_index = 0,
+                    empty_slot_count = 0,
+                    target_empty_slot = rand() % empty_slot_num + 1;
+             ;
+             map_index++)
+        {
+            // 如果当前索引处为空位
+            if (!(map_status & (1ULL << map_index)))
             {
-                putchar('-');
+                empty_slot_count++; // 递增计数
+
+                if (empty_slot_count == target_empty_slot)
+                {
+                    map[map_index] = rand() % 10 ? 1 : 2;
+                    empty_slot_num--;
+                    break;
+                }
             }
         }
-        putchar('+');
-        putchar('\n');
-
-        /* 打印竖直分隔线与数字 */
-        for (size_t column = 0; column < LEN; column++)
-        {
-            putchar('|');
-            printf_s("%*u",
-                     MAX_NUM_LEN,
-                     map[row * LEN + column] ? 1 << map[row * LEN + column] : 0);
-        }
-        putchar('|');
-        putchar('\n');
     }
 
-    /* 打印水平分隔线 */
-    for (size_t column = 0; column < LEN; column++)
+    return empty_slot_num;
+}
+
+int check_game_over(void)
+{
+    extern uint_map_t map[POW(LEN)];
+
+    for (size_t row = 0; row < LEN - 1; row++)
     {
-        putchar('+');
-        for (size_t i = 0; i < MAX_NUM_LEN; i++)
+        for (size_t column = 0; column < LEN - 1; column++)
         {
-            putchar('-');
+            if (map[INDEX(row, column)] == map[INDEX(row, column + 1)] ||
+                map[INDEX(row, column)] == map[INDEX(row + 1, column)])
+            {
+                return 0;
+            }
         }
     }
-    putchar('+');
+
+    for (size_t row = 0, column = LEN - 1; row < LEN - 1; row++)
+    {
+        if (map[INDEX(row, column)] == map[INDEX(row + 1, column)])
+        {
+            return 0;
+        }
+    }
+
+    for (size_t row = LEN - 1, column = 0; column < LEN - 1; column++)
+    {
+        if (map[INDEX(row, column)] == map[INDEX(row, column + 1)])
+        {
+            return 0;
+        }
+    }
+
+    return 1;
 }
