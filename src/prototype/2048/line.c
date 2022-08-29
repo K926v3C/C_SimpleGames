@@ -9,6 +9,7 @@ static unsigned score = 0;
 void test(unsigned serial, ...);
 void move(void);
 void merge(void);
+void modify_line(void);
 
 int main(void)
 {
@@ -73,6 +74,35 @@ void merge(void)
     }
 }
 
+void modify_line(void)
+{
+    extern unsigned line[LEN];
+
+    for (size_t slow_i = 0, rest_of_part = 1; rest_of_part && slow_i < LEN - 1; slow_i++)
+    {
+        for (size_t fast_i = slow_i + 1; fast_i < LEN; rest_of_part = ++fast_i != LEN)
+        {
+            if (line[fast_i])
+            {
+                if (!line[slow_i])
+                {
+                    line[slow_i] = line[fast_i];
+                    line[fast_i] = 0;
+                }
+                else
+                {
+                    if (line[slow_i] == line[fast_i])
+                    {
+                        line[slow_i] *= 2;
+                        line[fast_i] = 0;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 void test(unsigned serial, ...)
 {
     extern unsigned line[LEN];
@@ -99,9 +129,10 @@ void test(unsigned serial, ...)
     }
     puts("]");
 
-    move();
-    merge();
-    move();
+    // move();
+    // merge();
+    // move();
+    modify_line();
 
     printf("after  -> [");
     for (size_t i = 0; i < LEN; i++)
