@@ -9,7 +9,7 @@
 
 #define POW(x) ((x) * (x))
 #define LEN 4
-#define INDEX(row, column) ((row)*LEN + (column))
+#define INDEX(row_index, column_index) ((row_index)*LEN + (column_index))
 #define MAX_NUM_LEN 6 // 2^17 == 131072
 
 typedef uint_fast8_t uint_map_t;
@@ -40,8 +40,7 @@ void init_console(void);
 void print_map(void);
 Direction get_direction(void);
 int modify_map(const Direction direction);
-int move_line(const size_t start, const size_t end, const int step);
-int merge_line(const size_t start, const size_t end, const int step);
+int modify_line(const size_t start, const size_t end, const int step);
 size_t gen_number(void);
 int check_game_over(void);
 
@@ -101,7 +100,7 @@ void initialize(void)
     int i = rand() % POW(LEN);
     int j = rand() % (POW(LEN) - 1);
     map[i] = 1;
-    map[j + (i == j)] = rand() % 10 ? 1 : 2;
+    map[j + (i >= j)] = rand() % 10 ? 1 : 2;
 }
 
 void init_console(void)
@@ -342,59 +341,46 @@ int modify_map(const Direction direction)
          current != last + i;
          current += i)
     {
-        is_modified |= move_line(current, current + ((LEN - 1) * step), step);
-        is_modified |= merge_line(current, current + ((LEN - 1) * step), step);
-        is_modified |= move_line(current, current + ((LEN - 1) * step), step);
+        is_modified |= modify_line(current, current + ((LEN - 1) * step), step);
     }
 
     return is_modified;
 }
 
-int move_line(const size_t start, const size_t end, const int step)
-{
-    extern uint_map_t map[POW(LEN)];
-
-    int is_modified = 0;
-
-    size_t slow_i = start, fast_i;
-    uint_map_t rest_of_part;
-
-    do
-    {
-        for (fast_i = slow_i + step, rest_of_part = 0;
-             fast_i != end + step; // fast_i 超出行尾时结束循环
-             fast_i += step)
-        {
-            rest_of_part |= map[fast_i];
-
-            if (!map[fast_i - step] && map[fast_i])
-            {
-                map[fast_i - step] = map[fast_i];
-                map[fast_i] = 0;
-                is_modified = 1;
-            }
-        }
-        slow_i += map[slow_i] ? step : 0;
-    } while (rest_of_part && slow_i != end);
-
-    return is_modified;
-}
-
-int merge_line(const size_t start, const size_t end, const int step)
+int modify_line(const size_t start, const size_t end, const int step)
 {
     extern uint_map_t map[POW(LEN)];
     extern uint_score_t score;
 
     int is_modified = 0;
 
-    // i 指针触及行尾时即可结束循环
-    for (size_t i = start; i != end; i += step)
+    for (size_t slow_i = start, rest_of_part = 1;
+         rest_of_part && slow_i != end;
+         slow_i += step)
     {
-        if (map[i] && map[i] == map[i + step])
+        for (size_t fast_i = slow_i + step;
+             fast_i != end + step;
+             rest_of_part = ((fast_i += step) != (end + step)))
         {
-            map[i + step] = 0;
-            score += (1 << (++map[i]));
-            is_modified = 1;
+            if (map[fast_i])
+            {
+                if (!map[slow_i])
+                {
+                    map[slow_i] = map[fast_i];
+                    map[fast_i] = 0;
+                    is_modified = 1;
+                }
+                else
+                {
+                    if (map[slow_i] == map[fast_i])
+                    {
+                        score += (uint_score_t)(1 << (++map[slow_i]));
+                        map[fast_i] = 0;
+                        is_modified = 1;
+                    }
+                    break;
+                }
+            }
         }
     }
 
@@ -405,20 +391,13 @@ size_t gen_number(void)
 {
     extern uint_map_t map[POW(LEN)];
 
-    /* 记录地图状态 */
-    size_t map_status = {0};
-
     /* 空位计数 */
     size_t empty_slot_num = 0;
 
-    /* 扫描地图填充状态 */
+    /* 扫描地图空位数 */
     for (size_t i = 0; i < POW(LEN); i++)
     {
-        if (map[i])
-        {
-            map_status |= (1ULL << i);
-        }
-        else
+        if (!map[i])
         {
             empty_slot_num++;
         }
@@ -427,20 +406,20 @@ size_t gen_number(void)
     /* 有空位时随机生成数字 */
     if (empty_slot_num)
     {
-        for (size_t map_index = 0,
+        for (size_t index = 0,
                     empty_slot_count = 0,
-                    target_empty_slot = rand() % empty_slot_num + 1;
+                    target = rand() % empty_slot_num + 1;
              ;
-             map_index++)
+             index++)
         {
             // 如果当前索引处为空位
-            if (!(map_status & (1ULL << map_index)))
+            if (!map[index])
             {
                 empty_slot_count++; // 递增计数
 
-                if (empty_slot_count == target_empty_slot)
+                if (empty_slot_count == target)
                 {
-                    map[map_index] = rand() % 10 ? 1 : 2;
+                    map[index] = rand() % 10 ? 1 : 2;
                     empty_slot_num--;
                     break;
                 }
